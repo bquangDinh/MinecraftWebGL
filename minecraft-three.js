@@ -22,9 +22,9 @@ const FACE = {
 }
 
 var MESHING_METHOD = {
-  STUPID : 0,
-  CULLING: 1,
-  GREEDY : 2
+  STUPID : 'stupid',
+  CULLING: 'culling',
+  GREEDY : 'greedy'
 };
 
 var CHUNK_SIZE = {
@@ -36,7 +36,20 @@ var CHUNK_SIZE = {
   x64: '64 x 64'
 }
 
+var f = function(x,y,z,dimensions){
+  return (z * dimensions[2] * dimensions[2]) + (y * dimensions[1]) + x;
+}
+
+//Precondition: Create a rectangle quad with 4 points and its properties
+//return nothing when it is not enough 4 points to create a quad
+//Postcondition: return quad instance if it succeed
 var Quad = function(p1,p2,p3,p4,properties){
+  if(p1 == null || p2 == null || p3 == null || p4 == null
+  || typeof p1 === "undefined" || typeof p2 === "undefined" || typeof p3 === "undefined" || typeof p4 === "undefined"){
+    console.error("Not enough 4 points to create a quad");
+    return null;
+  }
+
   this.p1 = p1 || new THREE.Vector3();
   this.p2 = p2 || new THREE.Vector3();
   this.p3 = p3 || new THREE.Vector3();
@@ -82,6 +95,7 @@ var MeshBuilder = function(){
   this.verticles = [];
   this.indicates = [];
   this.faceCount = 0;
+
   this.addPoint = (point) => {
     this.verticles.push(point.x);
     this.verticles.push(point.y);
@@ -123,52 +137,56 @@ MeshBuilder.prototype.addQuad = function(quad,backface){
   this.faceCount++;
 }
 
-var MeshGenerator = (function(){
-  var voxels = new Array();
+var MeshGenerator = function(){
+  this.voxels = new Array();
+}
 
-  return{
-    Generate: function(dimensions){
-      if(dimensions.length < 3){
-        console.error('Not enough dimensions to generate mesh');
-        return null;
-      }
-      for(var x = 0; x < dimensions[0]; x++){
-        for(var y = 0; y < dimensions[1]; y++){
-          for(var z = 0; z < dimensions[2]; z++){
-            if ((x * x + y * y + z * z) < dimensions[0] * dimensions[1]){
-              let voxel = new Voxel({
-                type:VOXEL_TYPE.GRASS_VOXEL,
-                transparent:false
-              });
-              voxels.push(voxel);
-            }else{
-              let voxel = new Voxel({
-                type:VOXEL_TYPE.AIR_VOXEL,
-                transparent:true
-              });
-              voxels.push(voxel);
-            }
-          }
+MeshGenerator.prototype.Generate = function(dimensions){
+  if(dimensions.length < 3){
+    console.error('Not enough dimensions to generate mesh');
+    return null;
+  }
+  for(var x = 0; x < dimensions[0]; x++){
+    for(var y = 0; y < dimensions[1]; y++){
+      for(var z = 0; z < dimensions[2]; z++){
+        if ((x * x + y * y + z * z) < dimensions[0] * dimensions[1]){
+          let voxel = new Voxel({
+            type:VOXEL_TYPE.GRASS_VOXEL,
+            transparent:false
+          });
+          this.voxels.push(voxel);
+        }else{
+          let voxel = new Voxel({
+            type:VOXEL_TYPE.AIR_VOXEL,
+            transparent:true
+          });
+          this.voxels.push(voxel);
         }
       }
-      return voxels;
     }
   }
-})();
+  return this.voxels;
+}
 
-var Chunk = function(){
-  this.CHUNK_SIZE = 4;
+var Chunk = function(dimensions){
+  if(dimensions.length < 3){
+    console.error("Not enough dimensions to create a chunk");
+    return;
+  }
+
+  this.Dimensions = [dimensions[0],dimensions[1],dimensions[2]];
   this.Voxels = null;
   this.VOXEL_UNIT = 1;
-  this.mesnBuider = null;
+  this.meshBuilder = null;
+  this.meshGenerator = new MeshGenerator;
+  this.objInScene = null;
 
   this.ContainsPosition = function(position){
-    return position[0] >= 0 && position[0] < this.CHUNK_SIZE && position[1] >= 0 && position[1] < this.CHUNK_SIZE && position[2] >= 0 && position[2] < this.CHUNK_SIZE;
+    return position[0] >= 0 && position[0] < this.Dimensions[0] && position[1] >= 0 && position[1] < this.Dimensions[1] && position[2] >= 0 && position[2] < this.Dimensions[2];
   }
   this.FlattenPosition = function(position){
-    return (position[2] * this.CHUNK_SIZE * this.CHUNK_SIZE) + (position[1] * this.CHUNK_SIZE) + position[0];
+    return f(position[0],position[1],position[2],this.Dimensions);
   }
-
   this.getVoxel = function(position){
     if(!this.ContainsPosition(position)){
       return new Voxel({
@@ -179,7 +197,6 @@ var Chunk = function(){
 
     return this.Voxels[this.FlattenPosition(position)];
   }
-
   this.setVoxel = function(position, type, transparent){
     if(!this.ContainsPosition(position)){
       console.error("Chunk is not contain this position: " + position[0] + " " + position[1] + " " + position[2]);
@@ -193,13 +210,11 @@ var Chunk = function(){
 
     this.Voxels[FlattenPosition(position)] = voxel;
   }
-
   this.isBlockFaceVisible = function(position, axis, backface){
     let positionClone = [...position];
     positionClone[axis] += backface ? -1 : 1;
     return !this.getVoxel(positionClone).isSolid();
   }.bind(this);
-
   this.compareStep = function(pos1,pos2,direction,backface){
     let vox1 = this.getVoxel(pos1);
     let vox2 = this.getVoxel(pos2);
@@ -210,7 +225,7 @@ var Chunk = function(){
   this.stupidMeshing = function(){
     /*This is the simplest meshing algorithm. Everything it need to do that is check if the current voxel is solid or not. If it is, we add all 6 faces of the voxel to the mesh*/
     /*If you look all meshing algorithm, the structure of all meshing method is the same. Just each method has the different condition. With stupid meshing, we just need one condition that is checking solid voxel*/
-    this.meshBuider = new MeshBuilder;
+    this.meshBuilder = new MeshBuilder;
     var direction,workAxis1,workAxis2,startPos,currPos,offsetPos,quadSize,m,n;
     var p1,p2,p3,p4; // 4 points to create a quad
     var mV,nV; // I use this to apply THREE.Vector3 instead an array (because on an array, we cannot do some calculate like adding, subtracting on array. So we need vector. You can use any Vector calculating library. In this case, I am using THREE.Vector3)
@@ -232,9 +247,9 @@ var Chunk = function(){
       startPos = [0,0,0];
       currPos = [0,0,0];
 
-      for(startPos[direction] = 0; startPos[direction] < this.CHUNK_SIZE;startPos[direction]++){
-        for(startPos[workAxis1] = 0; startPos[workAxis1] < this.CHUNK_SIZE; startPos[workAxis1]++){
-          for(startPos[workAxis2] = 0; startPos[workAxis2] < this.CHUNK_SIZE; startPos[workAxis2]++){
+      for(startPos[direction] = 0; startPos[direction] < this.Dimensions[direction];startPos[direction]++){
+        for(startPos[workAxis1] = 0; startPos[workAxis1] < this.Dimensions[workAxis1]; startPos[workAxis1]++){
+          for(startPos[workAxis2] = 0; startPos[workAxis2] < this.Dimensions[workAxis2]; startPos[workAxis2]++){
 
             let startVoxel = this.getVoxel(startPos);
 
@@ -271,7 +286,7 @@ var Chunk = function(){
               transparent: startVoxel.isTransparent()
             });
 
-            this.meshBuider.addQuad(q,backface);
+            this.meshBuilder.addQuad(q,backface);
           }
         }
       }
@@ -281,7 +296,7 @@ var Chunk = function(){
     //With this method. We just add one more condition that is checking the face that we are processing that is visible or not. If it is not, don't render it.
     //We check the visible by checking the next voxel of this voxel in the direction is solid or not. If that voxel is solid, then the face which we're processing should not render.
     //Everything here stay the same (look stupidMeshing) expect one more condition
-    this.meshBuider = new MeshBuilder;
+    this.meshBuilder = new MeshBuilder;
     var direction,workAxis1,workAxis2,startPos,currPos,offsetPos,quadSize,m,n;
     var p1,p2,p3,p4,mV,nV;
     var that = this;
@@ -296,9 +311,9 @@ var Chunk = function(){
       startPos = [0,0,0];
       currPos = [0,0,0];
 
-      for(startPos[direction] = 0; startPos[direction] < this.CHUNK_SIZE;startPos[direction]++){
-        for(startPos[workAxis1] = 0; startPos[workAxis1] < this.CHUNK_SIZE; startPos[workAxis1]++){
-          for(startPos[workAxis2] = 0; startPos[workAxis2] < this.CHUNK_SIZE; startPos[workAxis2]++){
+      for(startPos[direction] = 0; startPos[direction] < this.Dimensions[direction];startPos[direction]++){
+        for(startPos[workAxis1] = 0; startPos[workAxis1] < this.Dimensions[workAxis1]; startPos[workAxis1]++){
+          for(startPos[workAxis2] = 0; startPos[workAxis2] < this.Dimensions[workAxis2]; startPos[workAxis2]++){
 
             let startVoxel = this.getVoxel(startPos);
 
@@ -332,29 +347,21 @@ var Chunk = function(){
               transparent: startVoxel.isTransparent()
             });
 
-            this.meshBuider.addQuad(q,backface);
+            this.meshBuilder.addQuad(q,backface);
           }
         }
       }
     }
   }
-
   this.greedyMeshing = function(){
     //With greedy meshing, it is quite hard for me @@.
     //We create a boolean array (merged array) which handle status of all quads in the direction (not yet process or processed)
     //if the quad is processed, we just ignore it.
-    this.meshBuider = new MeshBuilder;
+    this.meshBuilder = new MeshBuilder;
     var direction,workAxis1,workAxis2,startPos,currPos,offsetPos,quadSize,m,n;
     var merged = [];
     var p1,p2,p3,p4,mV,nV;
     var that = this;
-
-    for(let i = 0; i < this.CHUNK_SIZE;i++){
-      merged[i] = [];
-      for(let j = 0; j < this.CHUNK_SIZE;j++){
-        merged[i][j] = false;
-      }
-    }
 
     for(var face = 0; face < 6; face++){
       var backface = face % 2 == 0 ? false : true;
@@ -366,17 +373,17 @@ var Chunk = function(){
       startPos = [0,0,0];
       currPos = [0,0,0];
 
-      for(startPos[direction] = 0; startPos[direction] < this.CHUNK_SIZE;startPos[direction]++){
+      for(startPos[direction] = 0; startPos[direction] < this.Dimensions[direction];startPos[direction]++){
         //reset merged if we've done before
-        for(let i = 0; i < this.CHUNK_SIZE;i++){
+        for(let i = 0; i < this.Dimensions[workAxis1];i++){
           merged[i] = [];
-          for(let j = 0; j < this.CHUNK_SIZE;j++){
+          for(let j = 0; j < this.Dimensions[workAxis2];j++){
             merged[i][j] = false;
           }
         }
 
-        for(startPos[workAxis1] = 0; startPos[workAxis1] < this.CHUNK_SIZE; startPos[workAxis1]++){
-          for(startPos[workAxis2] = 0; startPos[workAxis2] < this.CHUNK_SIZE; startPos[workAxis2]++){
+        for(startPos[workAxis1] = 0; startPos[workAxis1] < this.Dimensions[workAxis1]; startPos[workAxis1]++){
+          for(startPos[workAxis2] = 0; startPos[workAxis2] < this.Dimensions[workAxis2]; startPos[workAxis2]++){
 
             let startVoxel = this.getVoxel(startPos);
 
@@ -387,12 +394,12 @@ var Chunk = function(){
             quadSize = [0,0,0];
 
             //figure out width
-            for(currPos = [...startPos],currPos[workAxis2]++;currPos[workAxis2] < this.CHUNK_SIZE && this.compareStep(startPos,currPos,direction,backface) && !merged[currPos[workAxis1]][currPos[workAxis2]];currPos[workAxis2]++){}
+            for(currPos = [...startPos],currPos[workAxis2]++;currPos[workAxis2] < this.Dimensions[workAxis2] && this.compareStep(startPos,currPos,direction,backface) && !merged[currPos[workAxis1]][currPos[workAxis2]];currPos[workAxis2]++){}
             quadSize[workAxis2] = currPos[workAxis2] - startPos[workAxis2];
 
             //figure out height
-            for(currPos = [...startPos],currPos[workAxis1]++;currPos[workAxis1] < this.CHUNK_SIZE && this.compareStep(startPos,currPos,direction,backface) && !merged[currPos[workAxis1]][currPos[workAxis2]];currPos[workAxis1]++){
-              for(currPos[workAxis2] = startPos[workAxis2];currPos[workAxis2] < this.CHUNK_SIZE && this.compareStep(startPos,currPos,direction,backface) && !merged[currPos[workAxis1]][currPos[workAxis2]];currPos[workAxis2]++){}
+            for(currPos = [...startPos],currPos[workAxis1]++;currPos[workAxis1] < this.Dimensions[workAxis1] && this.compareStep(startPos,currPos,direction,backface) && !merged[currPos[workAxis1]][currPos[workAxis2]];currPos[workAxis1]++){
+              for(currPos[workAxis2] = startPos[workAxis2];currPos[workAxis2] < this.Dimensions[workAxis2] && this.compareStep(startPos,currPos,direction,backface) && !merged[currPos[workAxis1]][currPos[workAxis2]];currPos[workAxis2]++){}
 
               if(currPos[workAxis2] - startPos[workAxis2] < quadSize[workAxis2]){
                 break;
@@ -423,7 +430,7 @@ var Chunk = function(){
               transparent: startVoxel.isTransparent()
             });
 
-            this.meshBuider.addQuad(q,backface);
+            this.meshBuilder.addQuad(q,backface);
 
             for(var f = 0; f < quadSize[workAxis1];f++){
               for(var g = 0; g < quadSize[workAxis2];g++){
@@ -450,14 +457,34 @@ Chunk.prototype.Generate = function(meshingMethod){
 }
 
 Chunk.prototype.GenerateTerrain = function(){
-  this.Voxels = MeshGenerator.Generate([this.CHUNK_SIZE,this.CHUNK_SIZE,this.CHUNK_SIZE]);
+  this.Voxels = this.meshGenerator.Generate(this.Dimensions);
 };
 
-/*GLOBAL*/
-var scene, chunk, axes;
-var lastMeshingChosen = MESHING_METHOD.GREEDY;
-var lastAxesChosen = true;
+Chunk.prototype.RenderToScene = function(scene){
+  if(!scene){
+    console.error("There is no scene to render. Please provice a scene");
+    return;
+  }
 
+  if(chunk.meshBuilder.verticles.length == 0 || chunk.meshBuilder.indicates.length == 0){
+    console.error("Not enough verticle to render. Might you forget generating a chunk first?");
+    return;
+  }
+
+  this.objInScene = createBufferGeometry(chunk.meshBuilder.verticles,chunk.meshBuilder.indicates,0xff000,lastOptionsChosen.lastWireFrameChosen);
+  scene.add(this.objInScene);
+}
+
+/*GLOBAL*/
+var scene, chunk, axes, guiControls;
+
+var lastOptionsChosen = {
+  lastAxesChosen: true,
+  lastMeshingChosen: MESHING_METHOD.GREEDY,
+  lastWireFrameChosen: true,
+  lastChunkSizeChosen: CHUNK_SIZE.x4,
+  enableWarning: false
+}
 /*-----------*/
 
 function KeyInputCallback(e){
@@ -478,31 +505,30 @@ function KeyInputCallback(e){
   }
 }
 
-var resetScene = function(scene,properties){
-  if(!scene){
+var initSceneWithOptions = function(){
+  if(scene == null){
+    console.warn("Scene is not initialized. Create a new scene");
+    scene = new THREE.Scene();
+  }
+
+  if(lastOptionsChosen.lastAxesChosen){
+    addAxesToScene();
+  }else{
+    removeAxesFromScence();
+  }
+}
+
+var resetScene = function(){
+  if(scene == null){
     console.error('Scene is not initialized');
     return;
   }
   while(scene.children.length > 0){ scene.remove(scene.children[0]); }
+
+  chunk = null;
   axes = null;
 
-  if(properties){
-    if(properties.axes){
-      addAxesToScene();
-    }
-  }
-}
-
-var initScene = function(properties){
-  let sceneProperties = Object.assign({
-    axes: true
-  },properties);
-
-  scene = new THREE.Scene();
-  if(sceneProperties.axes == true){
-    axes = new THREE.AxesHelper(5);
-    scene.add(axes);
-  }
+  initSceneWithOptions();
 }
 
 var addAxesToScene = function(){
@@ -563,22 +589,64 @@ var createBufferGeometry = function(verticles,indicates,color,wireframe){
 }
 
 var determineChunkSizeFromControls = function(value){
-  if(value == CHUNK_SIZE.x2) return 2;
-  if(value == CHUNK_SIZE.x4) return 4;
-  if(value == CHUNK_SIZE.x8) return 8;
-  if(value == CHUNK_SIZE.x16) return 16;
+  if(value == CHUNK_SIZE.x2){
+    lastOptionsChosen.lastChunkSizeChosen = value;
+    return [2,2,2];
+  }
+
+  if(value == CHUNK_SIZE.x4){
+    lastOptionsChosen.lastChunkSizeChosen = value;
+    return [4,4,4];
+  }
+
+  if(value == CHUNK_SIZE.x8){
+    lastOptionsChosen.lastChunkSizeChosen = value;
+    return [8,8,8];
+  }
+
+  if(value == CHUNK_SIZE.x16){
+    lastOptionsChosen.lastChunkSizeChosen = value;
+    return [16,16,16];
+  }
+
   if(value == CHUNK_SIZE.x32){
-    if(window.confirm('Are you sure? This option will hit the computer performance')){
-      return 32;
+    if(lastOptionsChosen.enableWarning == true){
+      if(window.confirm('Are you sure? This option will hit the computer performance')){
+        lastOptionsChosen.lastChunkSizeChosen = value;
+        return [32,32,32];
+      }
+    }else{
+      return [32,32,32];
     }
   }
   if(value == CHUNK_SIZE.x64){
-    if(window.confirm("What??? Are you really sure about this? This dam option will kill your computer, dude")){
-      if(window.confirm("Oh come on !!! Seriously???")){
-        return 64;
+    if(lastOptionsChosen.enableWarning == true){
+      if(window.confirm("What??? Are you really sure about this? This dam option will kill your computer, dude")){
+        if(window.confirm("Oh come on !!! Seriously???")){
+          lastOptionsChosen.lastChunkSizeChosen = value;
+          return [64,64,64];
+        }
       }
+    }else{
+      return [64,64,64];
     }
   }
+}
+
+var createChunk = function(){
+  if(chunk != null){
+    console.warn("Chunk has initialized already. Create a new one");
+    chunk = null;
+  }
+
+  chunk = new Chunk(determineChunkSizeFromControls(lastOptionsChosen.lastChunkSizeChosen));
+  chunk.GenerateTerrain();
+  chunk.Generate(lastOptionsChosen.lastMeshingChosen);
+  chunk.RenderToScene(scene);
+
+  //update Mesh Info on GUI
+  guiControls.faceCount = chunk.meshBuilder.faceCount;
+  guiControls.verticles = chunk.meshBuilder.faceCount * 4;
 }
 
 function main(){
@@ -589,50 +657,58 @@ function main(){
   document.body.appendChild(stats.dom);
 
   //dat gui library
-  var guiControls = function(){
-    this.meshingMethod = 'greedy';
-    this.moving = 'W,S,A,D';
-    this.rotating = 'Left Mouse';
-    this.zoom = 'Scroll Mouse';
-    this.showAxes = true;
-    this.wireFrame = true;
-    this.size = CHUNK_SIZE.x4;
+  guiControls = {
+    /*For Guideline*/
+    moving : 'W,S,A,D',
+    rotating : 'Left Mouse',
+    changeCameraPivot: 'Right Mouse',
+    zoom : 'Scroll Mouse',
+    xAxis : "Red Line",
+    yAxis : "Green Line",
+    zAxis : "Blue Line",
+    /*-------------*/
+    meshingMethod : 'greedy',
+    showAxes : true,
+    wireFrame : true,
+    size : CHUNK_SIZE.x4,
+
+    faceCount : -1,
+    verticles : -1,
   }
 
-  var controls = new guiControls;
-
   const gui = new dat.GUI();
-  gui.add(controls,'moving');
-  gui.add(controls,'rotating');
-  gui.add(controls,'zoom');
-  var meshingGuiController = gui.add(controls,'meshingMethod',[ 'stupid', 'culling', 'greedy' ]);
-  var axesGuiController = gui.add(controls,'showAxes');
-  var wireFrameGuiController = gui.add(controls,'wireFrame');
-  var chunkSizeGuiController = gui.add(controls,'size',['2 x 2', '4 x 4', '8 x 8', '16 x 16', '32 x 32', '64 x 64']);
+
+  /*Guideline GUI*/
+  var guidelineFolder = gui.addFolder("Guideline");
+  guidelineFolder.add(guiControls,'moving');
+  guidelineFolder.add(guiControls,'rotating');
+  guidelineFolder.add(guiControls,'changeCameraPivot');
+  guidelineFolder.add(guiControls,'zoom');
+  guidelineFolder.add(guiControls,'xAxis');
+  guidelineFolder.add(guiControls,'yAxis');
+  guidelineFolder.add(guiControls,'zAxis');
+  guidelineFolder.open();
+  /*-------------*/
+
+  var optionsFolder = gui.addFolder("Options");
+  var meshingGuiController = optionsFolder.add(guiControls,'meshingMethod',[ 'stupid', 'culling', 'greedy' ]);
+  var axesGuiController = optionsFolder.add(guiControls,'showAxes');
+  var wireFrameGuiController = optionsFolder.add(guiControls,'wireFrame');
+  var chunkSizeGuiController = optionsFolder.add(guiControls,'size',['2 x 2', '4 x 4', '8 x 8', '16 x 16', '32 x 32', '64 x 64']);
+  optionsFolder.open();
+
+  var infoFolder = gui.addFolder("Mesh Info");
+  var faceCount = infoFolder.add(guiControls,'faceCount').listen();
+  faceCount.domElement.style.pointerEvents = "none";
+  faceCount.domElement.style.opacity = .5;
+  var verticlesCount = infoFolder.add(guiControls,'verticles').listen();
+  verticlesCount.domElement.style.pointerEvents = "none";
+  verticlesCount.domElement.style.opacity = .5;
+  infoFolder.open();
 
   /*------------------***----------------------*/
 
   /*GUI Events*/
-  var changeMeshingMethod = function(value){
-    if(!scene){
-      initScene();
-    }else{
-      resetScene(scene,{axes: lastAxesChosen});
-    }
-
-    if(!chunk){
-      chunk = new Chunk;
-      chunk.GenerateTerrain();
-    }
-
-    let meshingMethod = value == 'stupid' ? MESHING_METHOD.STUPID : value == 'culling' ? MESHING_METHOD.CULLING : MESHING_METHOD.GREEDY;
-    lastMeshingChosen = meshingMethod;
-    chunk.Generate(meshingMethod);
-
-    let objInScene = createBufferGeometry(chunk.meshBuider.verticles,chunk.meshBuider.indicates,0xff000,true);
-    scene.add(objInScene);
-  }
-
   axesGuiController.onFinishChange(function(value){
       if(value == true){
         addAxesToScene();
@@ -642,44 +718,29 @@ function main(){
       lastAxesChosen = value;
   });
 
-  meshingGuiController.onFinishChange(changeMeshingMethod);
+  meshingGuiController.onFinishChange(function(value){
+    resetScene();
+    lastOptionsChosen.lastMeshingChosen = value;
+    lastOptionsChosen.enableWarning = false;
+    createChunk();
+  });
 
   wireFrameGuiController.onFinishChange(function(value){
-    if(!scene){
-      initScene();
-    }else{
-      resetScene(scene);
-    }
-
-    if(!chunk){
-      chunk = new Chunk;
-      chunk.GenerateTerrain();
-    }
-
-    let objInScene = createBufferGeometry(chunk.meshBuider.verticles,chunk.meshBuider.indicates,0xff000,value);
-    scene.add(objInScene);
+    resetScene();
+    lastOptionsChosen.lastWireFrameChosen = value;
+    lastOptionsChosen.enableWarning = false;
+    createChunk();
   });
 
   chunkSizeGuiController.onFinishChange(function(value){
-    if(!scene){
-      initScene();
-    }else{
-      resetScene(scene,{axes:lastAxesChosen});
-    }
-
-    chunk = new Chunk;
-    chunk.CHUNK_SIZE = determineChunkSizeFromControls(value);
-    chunk.GenerateTerrain();
-    chunk.Generate(lastMeshingChosen);
-
-    let meshingMethod = value == 'stupid' ? MESHING_METHOD.STUPID : value == 'culling' ? MESHING_METHOD.CULLING : MESHING_METHOD.GREEDY;
-    chunk.Generate(meshingMethod);
-
-    let objInScene = createBufferGeometry(chunk.meshBuider.verticles,chunk.meshBuider.indicates,0xff000,true);
-    scene.add(objInScene);
+    resetScene();
+    lastOptionsChosen.enableWarning = true;
+    lastOptionsChosen.lastChunkSizeChosen = value;
+    createChunk();
   });
 
-  initScene({axes:true});
+  initSceneWithOptions();
+
   camera = new THREE.PerspectiveCamera(75,window.innerWidth / window.innerHeight,0.1,1000);
   camera.position.z -= 20;
   camera.position.y += 10;
@@ -692,12 +753,7 @@ function main(){
   cameraControls	= new THREE.TrackballControls( camera, document.body )
 
   //first init
-  chunk = new Chunk;
-  chunk.CHUNK_SIZE = determineChunkSizeFromControls(CHUNK_SIZE.x4);
-  chunk.GenerateTerrain();
-  chunk.Generate(MESHING_METHOD.GREEDY);
-  let objInScene = createBufferGeometry(chunk.meshBuider.verticles,chunk.meshBuider.indicates,0xff000,true);
-  scene.add(objInScene);
+  createChunk();
 
   function animate(){
     //update stats
