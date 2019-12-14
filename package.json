@@ -1,0 +1,14 @@
+{
+  "name": "minecraft-webgl",
+  "version": "1.0.0",
+  "description": "Create a simple Minecraft World",
+  "main": "minecraft.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Dinh",
+  "license": "ISC",
+  "dependencies": {
+    "fs": "0.0.1-security"
+  }
+}
