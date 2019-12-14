@@ -1,23 +1,10 @@
+/*Documentation*/
+// https://0fps.net/2012/06/30/meshing-in-a-minecraft-game/ : thanks this article. It is very helpful. If you are going to create a voxel game like Minecraft. You should read this
+// https://eddieabbondanz.io/post/voxel/greedy-mesh/ : all meshing method I implemented here is from here. It is made by C#
+// THREE.js : the best library for making 3D things
+/*---------------------*/
 var scene,camera;
 const cameraSpeed = 0.5;
-
-function KeyInputCallback(e){
-  if(e.keyCode == 87){
-    camera.position.z -= cameraSpeed;
-  }
-
-  if(e.keyCode == 83){
-    camera.position.z += cameraSpeed;
-  }
-
-  if(e.keyCode == 65){
-    camera.position.x -= cameraSpeed;
-  }
-
-  if(e.keyCode == 68){
-    camera.position.x += cameraSpeed;
-  }
-}
 
 const VOXEL_TYPE = {
   AIR_VOXEL: "air_block",
@@ -44,7 +31,9 @@ var CHUNK_SIZE = {
   x2: '2 x 2',
   x4: '4 x 4',
   x8: '8 x 8',
-  x16: '16 x 16'
+  x16: '16 x 16',
+  x32: '32 x 32',
+  x64: '64 x 64'
 }
 
 var Quad = function(p1,p2,p3,p4,properties){
@@ -145,14 +134,8 @@ var MeshGenerator = (function(){
       }
       for(var x = 0; x < dimensions[0]; x++){
         for(var y = 0; y < dimensions[1]; y++){
-
-          var height = Math.abs(noise.perlin2(x / 2,y / 2));
-          height *= dimensions[1];
-          height = parseInt(height);
-          if(height == 0) height = 1;
-
           for(var z = 0; z < dimensions[2]; z++){
-            if(z > height){
+            if ((x * x + y * y + z * z) < dimensions[0] * dimensions[1]){
               let voxel = new Voxel({
                 type:VOXEL_TYPE.GRASS_VOXEL,
                 transparent:false
@@ -225,18 +208,27 @@ var Chunk = function(){
   }
 
   this.stupidMeshing = function(){
+    /*This is the simplest meshing algorithm. Everything it need to do that is check if the current voxel is solid or not. If it is, we add all 6 faces of the voxel to the mesh*/
+    /*If you look all meshing algorithm, the structure of all meshing method is the same. Just each method has the different condition. With stupid meshing, we just need one condition that is checking solid voxel*/
     this.meshBuider = new MeshBuilder;
     var direction,workAxis1,workAxis2,startPos,currPos,offsetPos,quadSize,m,n;
-    var p1,p2,p3,p4,mV,nV;
+    var p1,p2,p3,p4; // 4 points to create a quad
+    var mV,nV; // I use this to apply THREE.Vector3 instead an array (because on an array, we cannot do some calculate like adding, subtracting on array. So we need vector. You can use any Vector calculating library. In this case, I am using THREE.Vector3)
     var that = this;
 
+    //iterate each face of a voxel
     for(var face = 0; face < 6; face++){
+      //check if we're facing a back face or not
+      //You can take a look FACE list on there.
       var backface = face % 2 == 0 ? false : true;
 
+      //direction is 0 that means we are looking the voxel in X axis (0 is X axis, 1 is Y axis, 2 is Z axis)
       direction = face % 3;
+      //we will process on a plane that we're looking at. If direction is X then a plane which we're processing is YZ plane.
       workAxis1 = (direction + 1) % 3;
       workAxis2 = (direction + 2) % 3;
 
+      //Just keep here
       startPos = [0,0,0];
       currPos = [0,0,0];
 
@@ -261,9 +253,12 @@ var Chunk = function(){
             m[workAxis1] = quadSize[workAxis1];
             n[workAxis2] = quadSize[workAxis2];
 
+            //clone the startPos array by this way. Do not copy an array like this: array1 = array2
+            //you are copy the reference of the array that is not the value of the array. So when array1 change then array2 will be changed unexpectedly
             offsetPos = [...startPos];
             offsetPos[direction] += backface ? 0 : 1;
 
+            //add quad
             mV = new THREE.Vector3().fromArray(m,0);
             nV = new THREE.Vector3().fromArray(n,0);
             p1 = new THREE.Vector3().fromArray(offsetPos,0);
@@ -283,6 +278,9 @@ var Chunk = function(){
     }
   }
   this.cullingMeshing = function(){
+    //With this method. We just add one more condition that is checking the face that we are processing that is visible or not. If it is not, don't render it.
+    //We check the visible by checking the next voxel of this voxel in the direction is solid or not. If that voxel is solid, then the face which we're processing should not render.
+    //Everything here stay the same (look stupidMeshing) expect one more condition
     this.meshBuider = new MeshBuilder;
     var direction,workAxis1,workAxis2,startPos,currPos,offsetPos,quadSize,m,n;
     var p1,p2,p3,p4,mV,nV;
@@ -342,6 +340,9 @@ var Chunk = function(){
   }
 
   this.greedyMeshing = function(){
+    //With greedy meshing, it is quite hard for me @@.
+    //We create a boolean array (merged array) which handle status of all quads in the direction (not yet process or processed)
+    //if the quad is processed, we just ignore it.
     this.meshBuider = new MeshBuilder;
     var direction,workAxis1,workAxis2,startPos,currPos,offsetPos,quadSize,m,n;
     var merged = [];
@@ -459,6 +460,24 @@ var lastAxesChosen = true;
 
 /*-----------*/
 
+function KeyInputCallback(e){
+  if(e.keyCode == 87){
+    camera.position.z -= cameraSpeed;
+  }
+
+  if(e.keyCode == 83){
+    camera.position.z += cameraSpeed;
+  }
+
+  if(e.keyCode == 65){
+    camera.position.x -= cameraSpeed;
+  }
+
+  if(e.keyCode == 68){
+    camera.position.x += cameraSpeed;
+  }
+}
+
 var resetScene = function(scene,properties){
   if(!scene){
     console.error('Scene is not initialized');
@@ -548,6 +567,18 @@ var determineChunkSizeFromControls = function(value){
   if(value == CHUNK_SIZE.x4) return 4;
   if(value == CHUNK_SIZE.x8) return 8;
   if(value == CHUNK_SIZE.x16) return 16;
+  if(value == CHUNK_SIZE.x32){
+    if(window.confirm('Are you sure? This option will hit the computer performance')){
+      return 32;
+    }
+  }
+  if(value == CHUNK_SIZE.x64){
+    if(window.confirm("What??? Are you really sure about this? This dam option will kill your computer, dude")){
+      if(window.confirm("Oh come on !!! Seriously???")){
+        return 64;
+      }
+    }
+  }
 }
 
 function main(){
@@ -577,7 +608,7 @@ function main(){
   var meshingGuiController = gui.add(controls,'meshingMethod',[ 'stupid', 'culling', 'greedy' ]);
   var axesGuiController = gui.add(controls,'showAxes');
   var wireFrameGuiController = gui.add(controls,'wireFrame');
-  var chunkSizeGuiController = gui.add(controls,'size',['2 x 2', '4 x 4', '8 x 8', '16 x 16']);
+  var chunkSizeGuiController = gui.add(controls,'size',['2 x 2', '4 x 4', '8 x 8', '16 x 16', '32 x 32', '64 x 64']);
 
   /*------------------***----------------------*/
 
@@ -650,6 +681,9 @@ function main(){
 
   initScene({axes:true});
   camera = new THREE.PerspectiveCamera(75,window.innerWidth / window.innerHeight,0.1,1000);
+  camera.position.z -= 20;
+  camera.position.y += 10;
+  camera.position.x -= 10;
 
   var renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setSize(window.innerWidth,window.innerHeight);
