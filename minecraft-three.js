@@ -36,6 +36,13 @@ var CHUNK_SIZE = {
   x64: '64 x 64'
 }
 
+var CHUNK_SHAPE = {
+  CUBE: 'cube',
+  SPHERE: 'sphere',
+  SIMPLEX_NOISE_TERRAIN: 'simplex noise terrain',
+  PERLIN_NOISE_TERRAIN: 'perlin noise terrain'
+}
+
 var f = function(x,y,z,dimensions){
   return (z * dimensions[2] * dimensions[2]) + (y * dimensions[1]) + x;
 }
@@ -137,36 +144,87 @@ MeshBuilder.prototype.addQuad = function(quad,backface){
   this.faceCount++;
 }
 
-var MeshGenerator = function(){
-  this.voxels = new Array();
-}
-
-MeshGenerator.prototype.Generate = function(dimensions){
-  if(dimensions.length < 3){
-    console.error('Not enough dimensions to generate mesh');
-    return null;
+var MeshGenerator = (function(){
+  var sphereF = function(x,y,z,d){
+    return ((x - (d[0]/2)) * (x - (d[0]/2)) + (y - (d[1]/2)) * (y - (d[1]/2)) + (z - (d[2]/2)) * (z - (d[2]/2))) <= (d[0] / 2) * (d[1] / 2);
   }
-  for(var x = 0; x < dimensions[0]; x++){
-    for(var y = 0; y < dimensions[1]; y++){
-      for(var z = 0; z < dimensions[2]; z++){
-        if ((x * x + y * y + z * z) < dimensions[0] * dimensions[1]){
-          let voxel = new Voxel({
-            type:VOXEL_TYPE.GRASS_VOXEL,
-            transparent:false
-          });
-          this.voxels.push(voxel);
-        }else{
-          let voxel = new Voxel({
-            type:VOXEL_TYPE.AIR_VOXEL,
-            transparent:true
-          });
-          this.voxels.push(voxel);
+
+  var cubeF = function(x,y,z,d){
+    //nothing to check here :))
+    return true;
+  }
+
+  var cubeSimplexNoiseF = function(x,y,z,d){
+    return y <= Math.abs(noise.simplex2(x / 10,z / 10)) * d[1];
+  }
+
+  var cubePerlinNoiseF = function(x,y,z,d){
+    return y <= Math.abs(noise.perlin2(x / 10,z / 10)) * d[1];
+  }
+
+  this.generateShape = function(rangeLeft,rangeRight,checkingFunction){
+    if(rangeLeft.length < 3){
+      console.error("This range has not enough dimensions");
+      return;
+    }
+
+    if(rangeRight.length < 3){
+      console.error("This range has not enough dimensions");
+      return;
+    }
+
+    if(typeof checkingFunction != "function"){
+      console.error("Checking function is not valid");
+      return;
+    }
+
+    let dimensions = [rangeRight[0] - rangeLeft[0],rangeRight[1] - rangeLeft[1],rangeRight[2] - rangeLeft[2]];
+
+    voxels = new Array(dimensions[0],dimensions[1],dimensions[2]);
+    var n = 0;
+    for(let x = rangeLeft[0];x < rangeRight[0];x++){
+      for(let y = rangeLeft[1];y < rangeRight[1];y++){
+        for(let z = rangeLeft[2];z < rangeRight[2];z++,n++){
+            if(checkingFunction(x,y,z,dimensions)){
+              let v = new Voxel({
+                type: VOXEL_TYPE.GRASS_VOXEL,
+                transparent: false
+              });
+              voxels[n] = v;
+            }else{
+              let v = new Voxel({
+                type: VOXEL_TYPE.AIR_VOXEL,
+                transparent: true
+              });
+              voxels[n] = v;
+          }
         }
       }
     }
+
+    return voxels;
   }
-  return this.voxels;
-}
+
+  return{
+    generate: function(dimensions,shape){
+      if(shape == CHUNK_SHAPE.CUBE){
+          return generateShape([0,0,0],dimensions,cubeF);
+      }
+
+      if(shape == CHUNK_SHAPE.SPHERE){
+        return generateShape([0,0,0],dimensions,sphereF);
+      }
+
+      if(shape == CHUNK_SHAPE.SIMPLEX_NOISE_TERRAIN){
+        return generateShape([0,0,0],dimensions,cubeSimplexNoiseF);
+      }
+
+      if(shape == CHUNK_SHAPE.PERLIN_NOISE_TERRAIN){
+        return generateShape([0,0,0],dimensions,cubePerlinNoiseF);
+      }
+    }
+  }
+})();
 
 var Chunk = function(dimensions){
   if(dimensions.length < 3){
@@ -178,7 +236,6 @@ var Chunk = function(dimensions){
   this.Voxels = null;
   this.VOXEL_UNIT = 1;
   this.meshBuilder = null;
-  this.meshGenerator = new MeshGenerator;
   this.objInScene = null;
 
   this.ContainsPosition = function(position){
@@ -456,8 +513,9 @@ Chunk.prototype.Generate = function(meshingMethod){
   }
 }
 
-Chunk.prototype.GenerateTerrain = function(){
-  this.Voxels = this.meshGenerator.Generate(this.Dimensions);
+Chunk.prototype.GenerateTerrain = function(shape){
+  if(typeof shape === "undefined") shape = CHUNK_SHAPE.CUBE;
+  this.Voxels = MeshGenerator.generate(this.Dimensions,shape);
 };
 
 Chunk.prototype.RenderToScene = function(scene){
@@ -476,13 +534,15 @@ Chunk.prototype.RenderToScene = function(scene){
 }
 
 /*GLOBAL*/
-var scene, chunk, axes, guiControls;
+var scene, chunk, axes, guiControls, boundingBox;
 
 var lastOptionsChosen = {
   lastAxesChosen: true,
   lastMeshingChosen: MESHING_METHOD.GREEDY,
   lastWireFrameChosen: true,
   lastChunkSizeChosen: CHUNK_SIZE.x4,
+  lastChunkShapeChosen: CHUNK_SHAPE.SPHERE,
+  lastBoundingBoxChosen: true,
   enableWarning: false
 }
 /*-----------*/
@@ -640,9 +700,21 @@ var createChunk = function(){
   }
 
   chunk = new Chunk(determineChunkSizeFromControls(lastOptionsChosen.lastChunkSizeChosen));
-  chunk.GenerateTerrain();
+  chunk.GenerateTerrain(lastOptionsChosen.lastChunkShapeChosen);
   chunk.Generate(lastOptionsChosen.lastMeshingChosen);
   chunk.RenderToScene(scene);
+
+  if(lastOptionsChosen.lastBoundingBoxChosen){
+    if(boundingBox){
+      scene.remove(boundingBox);
+    }
+    boundingBox = new THREE.BoxHelper( chunk.objInScene, 0xffff00 );
+    scene.add( boundingBox );
+  }else{
+    if(boundingBox){
+      scene.remove(boundingBox);
+    }
+  }
 
   //update Mesh Info on GUI
   guiControls.faceCount = chunk.meshBuilder.faceCount;
@@ -667,11 +739,12 @@ function main(){
     yAxis : "Green Line",
     zAxis : "Blue Line",
     /*-------------*/
-    meshingMethod : 'greedy',
-    showAxes : true,
-    wireFrame : true,
-    size : CHUNK_SIZE.x4,
-
+    meshingMethod : lastOptionsChosen.lastMeshingChosen,
+    showAxes : lastOptionsChosen.lastAxesChosen,
+    showBoundingBox: lastOptionsChosen.lastBoundingBoxChosen,
+    wireFrame : lastOptionsChosen.lastWireFrameChosen,
+    size : lastOptionsChosen.lastChunkSizeChosen,
+    shape: lastOptionsChosen.lastChunkShapeChosen,
     faceCount : -1,
     verticles : -1,
   }
@@ -691,10 +764,12 @@ function main(){
   /*-------------*/
 
   var optionsFolder = gui.addFolder("Options");
-  var meshingGuiController = optionsFolder.add(guiControls,'meshingMethod',[ 'stupid', 'culling', 'greedy' ]);
+  var meshingGuiController = optionsFolder.add(guiControls,'meshingMethod',[ MESHING_METHOD.STUPID, MESHING_METHOD.CULLING, MESHING_METHOD.GREEDY ]);
   var axesGuiController = optionsFolder.add(guiControls,'showAxes');
+  var boundingBoxGuiController = optionsFolder.add(guiControls,'showBoundingBox');
   var wireFrameGuiController = optionsFolder.add(guiControls,'wireFrame');
-  var chunkSizeGuiController = optionsFolder.add(guiControls,'size',['2 x 2', '4 x 4', '8 x 8', '16 x 16', '32 x 32', '64 x 64']);
+  var chunkSizeGuiController = optionsFolder.add(guiControls,'size',[CHUNK_SIZE.x2,CHUNK_SIZE.x4,CHUNK_SIZE.x8,CHUNK_SIZE.x16,CHUNK_SIZE.x32,CHUNK_SIZE.x64]);
+  var chunkShapeGuiController = optionsFolder.add(guiControls,'shape',[CHUNK_SHAPE.CUBE,CHUNK_SHAPE.SPHERE,CHUNK_SHAPE.SIMPLEX_NOISE_TERRAIN,CHUNK_SHAPE.PERLIN_NOISE_TERRAIN]);
   optionsFolder.open();
 
   var infoFolder = gui.addFolder("Mesh Info");
@@ -718,6 +793,31 @@ function main(){
       lastAxesChosen = value;
   });
 
+  boundingBoxGuiController.onFinishChange(function(value){
+    lastOptionsChosen.lastBoundingBoxChosen = value;
+
+    if(value == false){
+      if(boundingBox != null){
+        if(scene != null){
+          scene.remove(boundingBox);
+        }
+      }
+    }else{
+      //prevent overdrawing
+      if(boundingBox != null){
+        if(scene != null){
+          scene.remove(boundingBox);
+        }
+      }
+      if(chunk != null){
+        boundingBox = new THREE.BoxHelper( chunk.objInScene, 0xffff00 );
+        scene.add( boundingBox );
+      }else{
+        console.error("No chunk to bound a box");
+      }
+    }
+  });
+
   meshingGuiController.onFinishChange(function(value){
     resetScene();
     lastOptionsChosen.lastMeshingChosen = value;
@@ -736,6 +836,13 @@ function main(){
     resetScene();
     lastOptionsChosen.enableWarning = true;
     lastOptionsChosen.lastChunkSizeChosen = value;
+    createChunk();
+  });
+
+  chunkShapeGuiController.onFinishChange(function(value){
+    resetScene();
+    lastOptionsChosen.lastChunkShapeChosen = value;
+    lastOptionsChosen.enableWarning = false;
     createChunk();
   });
 
